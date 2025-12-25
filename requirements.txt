@@ -1,0 +1,6 @@
+telethon
+pymongo
+dnspython
+python-dotenv
+quart
+aiohttp
