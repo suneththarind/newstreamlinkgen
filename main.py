@@ -1,4 +1,5 @@
 import os
+import time
 import logging
 import urllib.parse
 from telethon import TelegramClient, events
@@ -28,19 +29,20 @@ links_col = db['file_links']
 app = Quart(__name__)
 client = TelegramClient('bot', API_ID, API_HASH).start(bot_token=BOT_TOKEN)
 
+START_TIME = time.time()
+
 @app.route('/')
 async def index():
-    return "🚀 High-Speed Multi-Threaded Server is Online!"
+    return "🚀 Multi-File High-Speed Server is Online!"
 
-# --- Optimized Generator ---
+# --- Optimized High-Speed Generator ---
 async def file_generator(file_msg, start, end):
-    # CHUNK_SIZE එක 512KB ලෙස තැබීම Streaming වලට වඩාත් සුදුසුයි
-    CHUNK_SIZE = 512 * 1024 
-    offset = start
+    # 1MB Chunks for faster data flow
+    CHUNK_SIZE = 1024 * 1024 
     
     async for chunk in client.iter_download(
         file_msg.media,
-        offset=offset,
+        offset=start,
         limit=(end - start + 1),
         request_size=CHUNK_SIZE
     ):
@@ -55,8 +57,10 @@ async def stream_handler(msg_id):
             return "File Not Found", 404
 
         file_size = file_msg.file.size
-        file_name = file_msg.file.name or f"video_{msg_id}.mp4"
-        mime_type = file_msg.file.mime_type or 'video/mp4'
+        file_name = file_msg.file.name or f"file_{msg_id}"
+        
+        # ඕනෑම file type එකක් support කිරීම සඳහා mime_type ලබා ගැනීම
+        mime_type = file_msg.file.mime_type or 'application/octet-stream'
         
         range_header = request.headers.get('Range', None)
         start_byte = 0
@@ -65,11 +69,12 @@ async def stream_handler(msg_id):
         if range_header:
             range_parts = range_header.replace('bytes=', '').split('-')
             start_byte = int(range_parts[0])
-            if range_parts[1]:
+            if len(range_parts) > 1 and range_parts[1]:
                 end_byte = int(range_parts[1])
 
-        # 'inline' යෙදීමෙන් Download නොවී Stream වීම සිදු වේ
-        disposition = 'inline' if 'watch' in request.path else 'attachment'
+        # Streaming support (inline) for media files
+        is_watch = 'watch' in request.path
+        disposition = 'inline' if is_watch else 'attachment'
         
         headers = {
             'Content-Type': mime_type,
@@ -90,51 +95,69 @@ async def stream_handler(msg_id):
         )
 
     except Exception as e:
-        logger.error(f"Streaming Error: {e}")
+        logger.error(f"Error: {e}")
         return "Internal Error", 500
 
-# --- Bot Events with MongoDB Duplicate Check ---
+# --- Bot Commands ---
+
+@client.on(events.NewMessage(pattern='/start'))
+async def start_cmd(event):
+    await event.respond(
+        "👋 **ආයුබෝවන්!**\n\nමම ඕනෑම ගොනුවක් Direct Download Link එකක් බවට පත් කරන Bot කෙනෙක්.\n\n"
+        "📂 **භාවිතා කරන ආකාරය:** ඕනෑම File එකක් මට එවන්න.\n"
+        "⚡ **වේගය:** Unlimited High Speed.\n"
+        "🛠 **Commands:** /ping, /help"
+    )
+
+@client.on(events.NewMessage(pattern='/ping'))
+async def ping_cmd(event):
+    start = time.time()
+    msg = await event.respond("Pinging...")
+    end = time.time()
+    uptime = time.strftime("%Hh %Mm %Ss", time.gmtime(time.time() - START_TIME))
+    await msg.edit(f"🚀 **Pong!**\n🛰 **Latency:** {round((end - start) * 1000)}ms\n⏰ **Uptime:** `{uptime}`")
+
+@client.on(events.NewMessage(pattern='/help'))
+async def help_cmd(event):
+    await event.respond("උදව් අවශ්‍යද? ඕනෑම File එකක් හෝ Video එකක් මට Forward කරන්න. මම ඔබට එය බාගත කරගැනීමට හෝ Online නැරඹීමට හැකි සබැඳි (Links) ලබා දෙන්නම්.")
+
+# --- File Handler with MongoDB ---
 @client.on(events.NewMessage(incoming=True, func=lambda e: e.media))
 async def handle_media(event):
-    # File Unique ID එක ලබා ගැනීම (Duplicate check කිරීමට)
     file_id = event.file.id
     
-    # 1. පද්ධතියේ කලින් තිබේදැයි පරීක්ෂා කිරීම
-    existing_file = await links_col.find_one({"file_id": file_id})
-    
-    if existing_file:
-        res_text = f"♻️ **කලින් සකස් කරන ලද Link එක:**\n\n" + existing_file['text']
-        return await event.respond(res_text, link_preview=False)
+    # Duplicate Check
+    existing = await links_col.find_one({"file_id": file_id})
+    if existing:
+        return await event.respond(f"♻️ **කලින් සකස් කළ Link එක:**\n\n{existing['text']}", link_preview=False)
 
-    prog_msg = await event.respond("අලුත් Link එකක් සකසමින් පවතිනවා... ⏳")
+    prog = await event.respond("Processing File... ⏳")
     
     try:
         forwarded = await client.forward_messages(BIN_CHANNEL, event.message)
-        file_name = event.file.name or "video.mp4"
+        file_name = event.file.name or "file"
         clean_name = urllib.parse.quote(file_name)
         
         dl_link = f"{STREAM_URL}/download/{forwarded.id}?name={clean_name}"
         watch_link = f"{STREAM_URL}/watch/{forwarded.id}?name={clean_name}"
         
+        # File type එක අනුව icon එක වෙනස් කිරීම
+        icon = "🎬" if event.file.mime_type and "video" in event.file.mime_type else "📂"
+        
         res_text = (
-            f"📁 **File:** `{file_name}`\n"
+            f"{icon} **File:** `{file_name}`\n"
             f"📊 **Size:** {event.file.size / (1024*1024):.2f} MB\n\n"
             f"📥 [Direct Download]({dl_link})\n"
-            f"🎬 [Online Stream]({watch_link})"
+            f"🎬 [Online Stream]({watch_link})\n\n"
+            f"🚀 *Fastest link generated for you!*"
         )
 
-        # 2. අනාගත ප්‍රයෝජනය සඳහා Database එකේ සේව් කිරීම
-        await links_col.insert_one({
-            "file_id": file_id,
-            "text": res_text,
-            "msg_id": forwarded.id
-        })
-
-        await prog_msg.edit(f"✅ **Links Generated!**\n\n{res_text}", link_preview=False)
+        await links_col.insert_one({"file_id": file_id, "text": res_text})
+        await prog.edit(f"✅ **Links Generated!**\n\n{res_text}", link_preview=False)
         
     except Exception as e:
-        logger.error(f"Error: {e}")
-        await prog_msg.edit("දෝෂයක් සිදු විය.")
+        logger.error(f"Bot Error: {e}")
+        await prog.edit("දෝෂයක් සිදු විය. කරුණාකර නැවත උත්සාහ කරන්න.")
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
