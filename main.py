@@ -119,7 +119,7 @@ HTML_TEMPLATE = """
                 <a href="intent:{{ stream_link }}#Intent;package=org.videolan.vlc;end" class="btn btn-vlc">🧡 Play in VLC Player</a>
             </div>
         {% else %}
-            <h3>Welcome to Enusha Stream</h3>
+            <h3>Welcome to cinevibes.lk Stream</h3>
             <p class="info">Send a file to the bot to generate a high-speed link.</p>
         {% endif %}
     </div>
@@ -218,7 +218,7 @@ async def handle_media(event):
 
 @client.on(events.NewMessage(pattern='/start'))
 async def start(event):
-    await event.respond(f"👋 **Enusha Stream Bot වෙත සාදරයෙන් පිළිගනිමු!**\n\nඕනෑම File එකක් එවන්න, මම ඔබට High-Speed Link එකක් ලබා දෙන්නම්.", file=LOGO_URL)
+    await event.respond(f"👋 **CINEVIBES.LK Stream Bot වෙත සාදරයෙන් පිළිගනිමු!**\n\nඕනෑම File එකක් එවන්න, මම ඔබට High-Speed Link එකක් ලබා දෙන්නම්.", file=LOGO_URL)
 
 # --- Execution ---
 async def main():
