@@ -23,6 +23,7 @@ LOGO_URL = "https://image2url.com/r2/default/images/1769709206740-5b40868a-02c0-
 ADMIN_PASSWORD = "Menushabaduwa"
 START_TIME = time.time()
 
+# Database Setup
 db_client = AsyncIOMotorClient(MONGO_URI)
 db = db_client['telegram_bot']
 links_col = db['file_links']
@@ -31,7 +32,7 @@ app = Quart(__name__)
 app.secret_key = "cinecloud_ultra_secret"
 client = TelegramClient('bot', API_ID, API_HASH)
 
-# --- Full UI HTML ---
+# --- Full UI HTML (All Features Included) ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -45,12 +46,11 @@ HTML_TEMPLATE = """
         :root { --primary-red: #e50914; --deep-dark: #050505; }
         body { font-family: 'Poppins', sans-serif; background: var(--deep-dark); background-image: radial-gradient(circle at top right, #2a0202, transparent); color: #fff; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
         .logo { width: 85px; height: 85px; border-radius: 50%; margin-bottom: 20px; border: 2px solid var(--primary-red); box-shadow: 0 0 20px rgba(229, 9, 20, 0.5); }
-        .container { background: rgba(255, 255, 255, 0.06); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); padding: 30px; border-radius: 30px; width: 100%; max-width: 650px; border: 1px solid rgba(255, 255, 255, 0.1); text-align: center; }
+        .container { background: rgba(255, 255, 255, 0.06); backdrop-filter: blur(15px); padding: 30px; border-radius: 30px; width: 100%; max-width: 650px; border: 1px solid rgba(255, 255, 255, 0.1); text-align: center; }
         .search-box { width: 100%; max-width: 500px; margin-bottom: 25px; display: {{ 'block' if show_search else 'none' }}; }
         .search-box input { width: 100%; padding: 12px 20px; border-radius: 50px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.08); color: #fff; outline: none; text-align: center; }
         .home-msg { font-weight: 800; font-size: 26px; text-transform: uppercase; letter-spacing: 3px; text-shadow: 0 0 15px var(--primary-red); margin: 60px 0; }
         .player-wrapper { margin: 20px 0; border-radius: 18px; overflow: hidden; background: #000; border: 1px solid rgba(255, 255, 255, 0.05); }
-        .plyr--full-ui.plyr--video { --plyr-color-main: var(--primary-red); }
         .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 20px; }
         .btn { padding: 13px; border-radius: 50px; text-decoration: none; font-weight: 600; font-size: 13px; cursor: pointer; border: none; color: #fff; transition: 0.3s; }
         .btn-dl { background: rgba(229, 9, 20, 0.6); border: 1px solid rgba(255, 255, 255, 0.1); }
@@ -83,7 +83,7 @@ HTML_TEMPLATE = """
             <br><a href="/" class="btn btn-cp">Home</a>
         {% elif name %}
             <h3 style="margin-bottom:5px;">{{ name }}</h3>
-            <div style="font-size:11px; color:#aaa; margin-bottom:15px;">{{ size }} MB • {{ mime }}</div>
+            <div style="font-size:11px; color:#aaa; margin-bottom:15px;">{{ size }} MB</div>
             <div class="player-wrapper">
                 <video id="player" playsinline controls>
                     <source src="{{ stream_link }}" type="video/mp4">
@@ -105,8 +105,7 @@ HTML_TEMPLATE = """
         const player = new Plyr('#player');
         function cp(u, b) { 
             navigator.clipboard.writeText(u); 
-            const t = b.innerText; 
-            b.innerText = "✅ Copied!"; 
+            const t = b.innerText; b.innerText = "✅ Copied!"; 
             setTimeout(() => b.innerText = t, 2000); 
         }
     </script>
@@ -156,50 +155,43 @@ async def search():
 async def view(mid):
     try:
         msg = await client.get_messages(BIN_CHANNEL, ids=mid)
-        if not msg or not msg.file: 
-            return redirect('/')
-        
-        name = msg.file.name or "Unknown File"
-        size = round(msg.file.size / (1024*1024), 2)
-        mime = msg.file.mime_type or 'video/mp4'
-        
-        return await render_template_string(HTML_TEMPLATE, 
-                                            title=name,
-                                            name=name, 
-                                            size=size,
-                                            mime=mime,
-                                            show_search=True, 
-                                            dl_link=f"{STREAM_URL}/dl/{mid}", 
-                                            stream_link=f"{STREAM_URL}/sw/{mid}", 
-                                            logo=LOGO_URL)
-    except Exception:
-        return redirect('/')
+        if not msg or not msg.file: return redirect('/')
+        return await render_template_string(HTML_TEMPLATE, title=msg.file.name, name=msg.file.name, size=round(msg.file.size/(1024*1024),2), show_search=True, dl_link=f"{STREAM_URL}/dl/{mid}", stream_link=f"{STREAM_URL}/sw/{mid}", logo=LOGO_URL)
+    except: return redirect('/')
 
 @app.route('/dl/<int:mid>')
 @app.route('/sw/<int:mid>')
 async def stream(mid):
     msg = await client.get_messages(BIN_CHANNEL, ids=mid)
-    if not msg: return "File Not Found", 404
     f_size = msg.file.size
     range_h = request.headers.get('Range', 'bytes=0-')
     start = int(range_h.replace('bytes=', '').split('-')[0])
     end = f_size - 1
-    headers = {
-        'Content-Type': msg.file.mime_type or 'video/mp4', 
-        'Accept-Ranges': 'bytes', 
-        'Content-Length': str(end-start+1), 
-        'Content-Range': f'bytes {start}-{end}/{f_size}', 
-        'Content-Disposition': f'inline; filename="{msg.file.name}"'
-    }
+    headers = {'Content-Type': msg.file.mime_type or 'video/mp4', 'Accept-Ranges': 'bytes', 'Content-Length': str(end-start+1), 'Content-Range': f'bytes {start}-{end}/{f_size}', 'Content-Disposition': f'inline; filename="{msg.file.name}"'}
     return Response(file_gen(msg, start, end), status=206, headers=headers)
 
-# --- Bot ---
+# --- Bot Handlers (With Duplicate Check) ---
 @client.on(events.NewMessage(incoming=True, func=lambda e: e.media))
 async def media_h(event):
+    # Unique File ID Check
+    file_id = event.file.id
+    existing = await links_col.find_one({"file_id": file_id})
+    
+    if existing:
+        return await event.respond(f"✅ **කලින් සකස් කළ Link එක:**\n\n🔗 {existing['web_link']}", link_preview=False)
+
+    prog = await event.respond("🔄 **අලුත් ලින්ක් එකක් හදනවා...**")
     fwd = await client.forward_messages(BIN_CHANNEL, event.message)
     web = f"{STREAM_URL}/view/{fwd.id}"
-    await links_col.insert_one({"file_name": event.file.name, "web_link": web})
-    await event.respond(f"✅ **Link Ready:**\n{web}", link_preview=False)
+    
+    # Save to MongoDB
+    await links_col.insert_one({
+        "file_id": file_id,
+        "file_name": event.file.name,
+        "web_link": web
+    })
+    
+    await prog.edit(f"✅ **සූදානම්!**\n\n🔗 {web}", link_preview=False)
 
 async def main():
     await client.start(bot_token=BOT_TOKEN)
