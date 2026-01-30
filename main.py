@@ -38,7 +38,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ title }} - CineCloud</title>
+    <title>{{ title if title else 'CineCloud' }}</title>
     <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;800&display=swap" rel="stylesheet">
     <style>
@@ -82,8 +82,14 @@ HTML_TEMPLATE = """
             {% for r in results %}<div style="text-align:left; padding:10px; border-bottom:1px solid #333;"><a href="{{ r.web_link }}" style="color:#ddd; text-decoration:none;">🎬 {{ r.file_name }}</a></div>{% else %}<p>No files found.</p>{% endfor %}
             <br><a href="/" class="btn btn-cp">Home</a>
         {% elif name %}
-            <h3>{{ name }}</h3>
-            <div class="player-wrapper"><video id="player" playsinline controls><source src="{{ stream_link }}" type="video/mp4"><source src="{{ stream_link }}" type="video/x-matroska"></video></div>
+            <h3 style="margin-bottom:5px;">{{ name }}</h3>
+            <div style="font-size:11px; color:#aaa; margin-bottom:15px;">{{ size }} MB • {{ mime }}</div>
+            <div class="player-wrapper">
+                <video id="player" playsinline controls>
+                    <source src="{{ stream_link }}" type="video/mp4">
+                    <source src="{{ stream_link }}" type="video/x-matroska">
+                </video>
+            </div>
             <div class="btn-group">
                 <a href="{{ dl_link }}" class="btn btn-dl">📥 Download</a>
                 <button onclick="cp('{{ dl_link }}', this)" class="btn btn-cp">📋 Copy DL</button>
@@ -97,7 +103,12 @@ HTML_TEMPLATE = """
     <script src="https://cdn.plyr.io/3.7.8/plyr.js"></script>
     <script>
         const player = new Plyr('#player');
-        function cp(u, b) { navigator.clipboard.writeText(u); const t = b.innerText; b.innerText = "✅ Copied!"; setTimeout(() => b.innerText = t, 2000); }
+        function cp(u, b) { 
+            navigator.clipboard.writeText(u); 
+            const t = b.innerText; 
+            b.innerText = "✅ Copied!"; 
+            setTimeout(() => b.innerText = t, 2000); 
+        }
     </script>
 </body>
 </html>
@@ -116,7 +127,8 @@ async def index():
 @app.route('/admin', methods=['GET', 'POST'])
 async def admin():
     if request.method == 'POST':
-        if (await request.form).get('pw') == ADMIN_PASSWORD:
+        form = await request.form
+        if form.get('pw') == ADMIN_PASSWORD:
             session['admin'] = True
             return redirect('/admin')
         return await render_template_string(HTML_TEMPLATE, is_login=True, err="Wrong Password", logo=LOGO_URL)
@@ -142,19 +154,43 @@ async def search():
 
 @app.route('/view/<int:mid>')
 async def view(mid):
-    msg = await client.get_messages(BIN_CHANNEL, ids=mid)
-    if not msg or not msg.file: return "Not Found", 404
-    return await render_template_string(HTML_TEMPLATE, name=msg.file.name, show_search=True, dl_link=f"{STREAM_URL}/dl/{mid}", stream_link=f"{STREAM_URL}/sw/{mid}", logo=LOGO_URL)
+    try:
+        msg = await client.get_messages(BIN_CHANNEL, ids=mid)
+        if not msg or not msg.file: 
+            return redirect('/')
+        
+        name = msg.file.name or "Unknown File"
+        size = round(msg.file.size / (1024*1024), 2)
+        mime = msg.file.mime_type or 'video/mp4'
+        
+        return await render_template_string(HTML_TEMPLATE, 
+                                            title=name,
+                                            name=name, 
+                                            size=size,
+                                            mime=mime,
+                                            show_search=True, 
+                                            dl_link=f"{STREAM_URL}/dl/{mid}", 
+                                            stream_link=f"{STREAM_URL}/sw/{mid}", 
+                                            logo=LOGO_URL)
+    except Exception:
+        return redirect('/')
 
 @app.route('/dl/<int:mid>')
 @app.route('/sw/<int:mid>')
 async def stream(mid):
     msg = await client.get_messages(BIN_CHANNEL, ids=mid)
+    if not msg: return "File Not Found", 404
     f_size = msg.file.size
     range_h = request.headers.get('Range', 'bytes=0-')
     start = int(range_h.replace('bytes=', '').split('-')[0])
     end = f_size - 1
-    headers = {'Content-Type': msg.file.mime_type or 'video/mp4', 'Accept-Ranges': 'bytes', 'Content-Length': str(end-start+1), 'Content-Range': f'bytes {start}-{end}/{f_size}', 'Content-Disposition': f'inline; filename="{msg.file.name}"'}
+    headers = {
+        'Content-Type': msg.file.mime_type or 'video/mp4', 
+        'Accept-Ranges': 'bytes', 
+        'Content-Length': str(end-start+1), 
+        'Content-Range': f'bytes {start}-{end}/{f_size}', 
+        'Content-Disposition': f'inline; filename="{msg.file.name}"'
+    }
     return Response(file_gen(msg, start, end), status=206, headers=headers)
 
 # --- Bot ---
