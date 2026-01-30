@@ -21,22 +21,22 @@ API_ID = int(os.getenv('API_ID'))
 API_HASH = os.getenv('API_HASH')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 BIN_CHANNEL = int(os.getenv('BIN_CHANNEL'))
-STREAM_URL = os.getenv('STREAM_URL').rstrip('/')
+STREAM_URL = os.getenv('STREAM_URL', '').rstrip('/')
 MONGO_URI = os.getenv('MONGO_URI')
 LOGO_URL = "https://image2url.com/r2/default/images/1769709206740-5b40868a-02c0-4c63-9db9-c5e68c0733b0.jpg"
 ADMIN_PASSWORD = "Menushabaduwa"
 START_TIME = time.time()
 
-# Database
+# Database Setup
 db_client = AsyncIOMotorClient(MONGO_URI)
 db = db_client['telegram_bot']
 links_col = db['file_links']
 
 app = Quart(__name__)
-app.secret_key = "cinecloud_ultra_stable_key"
+app.secret_key = "cinecloud_ultra_stable_v3"
 client = TelegramClient('bot', API_ID, API_HASH)
 
-# --- UI HTML (Same Design) ---
+# --- UI HTML ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -51,7 +51,7 @@ HTML_TEMPLATE = """
         .logo { width: 85px; height: 85px; border-radius: 50%; margin-bottom: 20px; border: 2px solid var(--primary-red); box-shadow: 0 0 20px rgba(229, 9, 20, 0.5); }
         .container { background: rgba(255, 255, 255, 0.06); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); padding: 30px; border-radius: 30px; width: 100%; max-width: 650px; border: 1px solid rgba(255, 255, 255, 0.1); text-align: center; }
         .search-box { width: 100%; max-width: 500px; margin-bottom: 25px; display: {{ 'block' if show_search else 'none' }}; }
-        .search-box input { width: 100%; padding: 12px 20px; border-radius: 50px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.08); color: #fff; outline: none; text-align: center; }
+        .search-box input { width: 100%; padding: 12px 20px; border-radius: 50px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.08); color: #fff; outline: none; text-align: center; font-family: inherit; }
         .home-msg { font-weight: 800; font-size: 26px; text-transform: uppercase; letter-spacing: 3px; text-shadow: 0 0 15px var(--primary-red); margin: 60px 0; }
         .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 20px; }
         .btn { padding: 13px; border-radius: 50px; text-decoration: none; font-weight: 600; font-size: 13px; cursor: pointer; border: none; color: #fff; transition: 0.3s; text-align: center; }
@@ -60,6 +60,7 @@ HTML_TEMPLATE = """
         .btn-vlc { background: rgba(255, 136, 0, 0.35); grid-column: span 2; border: 1px solid rgba(255, 136, 0, 0.1); }
         .btn:hover { transform: translateY(-3px); background: var(--primary-red); }
         .stat-box { background: rgba(255,255,255,0.05); padding: 15px; border-radius: 15px; border: 1px solid rgba(229, 9, 20, 0.2); min-width: 120px; }
+        .plyr--full-ui.plyr--video { --plyr-color-main: var(--primary-red); }
     </style>
 </head>
 <body>
@@ -80,9 +81,9 @@ HTML_TEMPLATE = """
             </div>
             <p>Uptime: {{ uptime }}</p><br><a href="/logout" style="color:#888;">Logout</a>
         {% elif is_search %}
-            <h3>🔍 Results</h3>
-            {% for r in results %}<div style="text-align:left; padding:10px; border-bottom:1px solid #333;"><a href="{{ r.web_link }}" style="color:#ddd; text-decoration:none;">🎬 {{ r.file_name }}</a></div>{% else %}<p>No files found.</p>{% endfor %}
-            <br><a href="/" class="btn btn-cp">Home</a>
+            <h3>🔍 Search Results</h3>
+            {% for r in results %}<div style="text-align:left; padding:12px; border-bottom:1px solid #333;"><a href="{{ r.web_link }}" style="color:#ddd; text-decoration:none;">🎬 {{ r.file_name }}</a></div>{% else %}<p>No files found.</p>{% endfor %}
+            <br><a href="/" class="btn btn-cp">Back Home</a>
         {% elif is_view %}
             <h3>{{ name }}</h3><div style="font-size:11px; color:#aaa; margin-bottom:15px;">{{ size }} MB</div>
             <div style="margin:20px 0; border-radius:18px; overflow:hidden; background:#000; border:1px solid rgba(255,255,255,0.05);">
@@ -91,20 +92,29 @@ HTML_TEMPLATE = """
             <div class="btn-group">
                 <a href="{{ dl_link }}" class="btn btn-dl">📥 Download Now</a>
                 <button onclick="cp('{{ dl_link }}', this)" class="btn btn-cp">📋 Copy Link</button>
-                <a href="intent:{{ stream_link }}#Intent;package=org.videolan.vlc;end" class="btn btn-vlc">🧡 Play in VLC</a>
+                <a href="intent:{{ stream_link }}#Intent;package=org.videolan.vlc;end" class="btn btn-vlc">🧡 Play in VLC Player</a>
             </div>
         {% else %}
             <div class="home-msg">CINECLOUD IS ONLINE</div>
         {% endif %}
     </div>
-    <script src="https://cdn.plyr.io/3.7.8/plyr.js"></script><script>const player = new Plyr('#player'); function cp(u,b){navigator.clipboard.writeText(u); b.innerText="✅ Copied!"; setTimeout(()=>b.innerText="📋 Copy Link",2000);}</script>
+    <script src="https://cdn.plyr.io/3.7.8/plyr.js"></script>
+    <script>
+        const player = new Plyr('#player');
+        function cp(u,b){
+            navigator.clipboard.writeText(u);
+            const originalText = b.innerText;
+            b.innerText="✅ Copied!";
+            setTimeout(()=>b.innerText=originalText, 2000);
+        }
+    </script>
 </body>
 </html>
 """
 
-# --- ස්ථාවර Generator එක (Original Logic) ---
+# --- ස්ථාවර Generator එක (High Speed & Resume Support) ---
 async def file_generator(file_msg, start, end):
-    CHUNK_SIZE = 1024 * 1024  # 1MB chunks
+    CHUNK_SIZE = 1024 * 1024  # 1MB
     offset = start
     while offset <= end:
         remaining = end - offset + 1
@@ -115,7 +125,7 @@ async def file_generator(file_msg, start, end):
                 offset += len(chunk)
             if current_limit == 0: break
         except Exception as e:
-            logger.error(f"Error while generating chunks: {e}")
+            logger.error(f"Generator Error: {e}")
             break
 
 # --- Web Routes ---
@@ -182,7 +192,7 @@ async def stream_handler(msg_id):
             'Content-Type': file_msg.file.mime_type or 'application/octet-stream',
             'Accept-Ranges': 'bytes',
             'Content-Length': str(end_byte - start_byte + 1),
-            'Content-Disposition': f'attachment; filename="{file_msg.file.name}"',
+            'Content-Disposition': f'attachment; filename="{file_msg.file.name}"' if 'download' in request.path else f'inline; filename="{file_msg.file.name}"',
         }
 
         status_code = 200
@@ -195,7 +205,7 @@ async def stream_handler(msg_id):
         logger.error(f"Streaming Error: {str(e)}")
         return "Internal Server Error", 500
 
-# --- Bot Events (With Duplicate Check) ---
+# --- Bot Events ---
 @client.on(events.NewMessage(incoming=True, func=lambda e: e.media))
 async def handle_media(event):
     file_id = event.file.id
@@ -210,8 +220,22 @@ async def handle_media(event):
     await links_col.insert_one({"file_id": file_id, "file_name": event.file.name, "web_link": web_link})
     await prog.edit(f"✅ **සූදානම්!**\n🔗 {web_link}", link_preview=False)
 
-# --- Main ---
+# --- Start Up Sequence (Fix for Disconnected Error) ---
+async def start_services():
+    await client.start(bot_token=BOT_TOKEN)
+    logger.info("✅ Telegram Bot Started!")
+
+    from hypercorn.asyncio import serve
+    from hypercorn.config import Config
+    
+    config = Config()
+    config.bind = [f"0.0.0.0:{os.environ.get('PORT', 8080)}"]
+    
+    logger.info("🚀 Web Server Starting on Hypercorn...")
+    await serve(app, config)
+
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))
-    client.loop.create_task(app.run_task(host='0.0.0.0', port=port))
-    client.run_until_disconnected()
+    try:
+        asyncio.run(start_services())
+    except KeyboardInterrupt:
+        pass
