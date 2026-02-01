@@ -6,7 +6,7 @@ import time
 import psutil
 from datetime import datetime
 from telethon import TelegramClient, events
-from quart import Quart, Response, request, render_template_string, redirect, url_for, session
+from quart import Quart, Response, request, render_template_string, redirect, session
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 
@@ -33,8 +33,17 @@ db = db_client['telegram_bot']
 links_col = db['file_links']
 
 app = Quart(__name__)
-app.secret_key = "cinecloud_ultra_stable_v3"
+app.secret_key = "cinecloud_ultra_stable_v4"
 client = TelegramClient('bot', API_ID, API_HASH)
+
+# --- 🛠️ CORS & Access Control (මෙය ඉතා වැදගත්) ---
+@app.after_request
+async def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Range, Authorization'
+    response.headers['Access-Control-Expose-Headers'] = 'Content-Range, Content-Length, Accept-Ranges'
+    return response
 
 # --- UI HTML ---
 HTML_TEMPLATE = """
@@ -60,7 +69,6 @@ HTML_TEMPLATE = """
         .btn-vlc { background: rgba(255, 136, 0, 0.35); grid-column: span 2; border: 1px solid rgba(255, 136, 0, 0.1); }
         .btn:hover { transform: translateY(-3px); background: var(--primary-red); }
         .stat-box { background: rgba(255,255,255,0.05); padding: 15px; border-radius: 15px; border: 1px solid rgba(229, 9, 20, 0.2); min-width: 120px; }
-        .plyr--full-ui.plyr--video { --plyr-color-main: var(--primary-red); }
     </style>
 </head>
 <body>
@@ -70,7 +78,6 @@ HTML_TEMPLATE = """
         {% if is_login %}
             <h2 style="color:var(--primary-red)">🔐 Admin Login</h2>
             <form method="post"><input type="password" name="pw" style="width:80%; padding:10px; border-radius:20px; border:none; margin-bottom:10px;" placeholder="Password"><br><button type="submit" class="btn btn-dl">Login</button></form>
-            {% if err %}<p style="color:red">{{ err }}</p>{% endif %}
         {% elif is_admin %}
             <h2 style="color:var(--primary-red)">🚀 Admin Dashboard</h2>
             <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap;">
@@ -103,16 +110,15 @@ HTML_TEMPLATE = """
         const player = new Plyr('#player');
         function cp(u,b){
             navigator.clipboard.writeText(u);
-            const originalText = b.innerText;
-            b.innerText="✅ Copied!";
-            setTimeout(()=>b.innerText=originalText, 2000);
+            const t = b.innerText; b.innerText="✅ Copied!";
+            setTimeout(()=>b.innerText=t, 2000);
         }
     </script>
 </body>
 </html>
 """
 
-# --- ස්ථාවර Generator එක (High Speed & Resume Support) ---
+# --- 🚀 පරණ ස්ථාවර Generator එක ---
 async def file_generator(file_msg, start, end):
     CHUNK_SIZE = 1024 * 1024  # 1MB
     offset = start
@@ -128,6 +134,44 @@ async def file_generator(file_msg, start, end):
             logger.error(f"Generator Error: {e}")
             break
 
+# --- Stream Handler (CORS & OPTIONS support ඇතුළුව) ---
+@app.route('/download/<int:msg_id>', methods=['GET', 'OPTIONS'])
+@app.route('/watch/<int:msg_id>', methods=['GET', 'OPTIONS'])
+async def stream_handler(msg_id):
+    if request.method == 'OPTIONS':
+        return Response(status=204)
+        
+    try:
+        file_msg = await client.get_messages(BIN_CHANNEL, ids=msg_id)
+        if not file_msg or not file_msg.file: return "File Not Found", 404
+
+        file_size = file_msg.file.size
+        range_header = request.headers.get('Range', None)
+        start_byte = 0
+        end_byte = file_size - 1
+
+        if range_header:
+            range_parts = range_header.replace('bytes=', '').split('-')
+            start_byte = int(range_parts[0])
+            if range_parts[1]: end_byte = int(range_parts[1])
+
+        headers = {
+            'Content-Type': file_msg.file.mime_type or 'application/octet-stream',
+            'Accept-Ranges': 'bytes',
+            'Content-Length': str(end_byte - start_byte + 1),
+            'Content-Disposition': f'attachment; filename="{file_msg.file.name}"',
+        }
+
+        status_code = 200
+        if range_header:
+            headers['Content-Range'] = f'bytes {start_byte}-{end_byte}/{file_size}'
+            status_code = 206
+
+        return Response(file_generator(file_msg, start_byte, end_byte), status=status_code, headers=headers)
+    except Exception as e:
+        logger.error(f"Streaming Error: {str(e)}")
+        return "Internal Server Error", 500
+
 # --- Web Routes ---
 @app.route('/')
 async def index():
@@ -140,7 +184,6 @@ async def admin():
         if form.get('pw') == ADMIN_PASSWORD:
             session['admin'] = True
             return redirect('/admin')
-        return await render_template_string(HTML_TEMPLATE, is_login=True, err="Wrong Password", logo=LOGO_URL)
     if not session.get('admin'): return await render_template_string(HTML_TEMPLATE, is_login=True, logo=LOGO_URL)
     
     start_p = time.time()
@@ -171,40 +214,6 @@ async def view_page(msg_id):
         return await render_template_string(HTML_TEMPLATE, is_view=True, title=name, name=name, size=size, show_search=True, dl_link=f"{STREAM_URL}/download/{msg_id}", stream_link=f"{STREAM_URL}/watch/{msg_id}", logo=LOGO_URL)
     except: return redirect('/')
 
-@app.route('/download/<int:msg_id>')
-@app.route('/watch/<int:msg_id>')
-async def stream_handler(msg_id):
-    try:
-        file_msg = await client.get_messages(BIN_CHANNEL, ids=msg_id)
-        if not file_msg or not file_msg.file: return "File Not Found", 404
-
-        file_size = file_msg.file.size
-        range_header = request.headers.get('Range', None)
-        start_byte = 0
-        end_byte = file_size - 1
-
-        if range_header:
-            range_parts = range_header.replace('bytes=', '').split('-')
-            start_byte = int(range_parts[0])
-            if range_parts[1]: end_byte = int(range_parts[1])
-
-        headers = {
-            'Content-Type': file_msg.file.mime_type or 'application/octet-stream',
-            'Accept-Ranges': 'bytes',
-            'Content-Length': str(end_byte - start_byte + 1),
-            'Content-Disposition': f'attachment; filename="{file_msg.file.name}"' if 'download' in request.path else f'inline; filename="{file_msg.file.name}"',
-        }
-
-        status_code = 200
-        if range_header:
-            headers['Content-Range'] = f'bytes {start_byte}-{end_byte}/{file_size}'
-            status_code = 206
-
-        return Response(file_generator(file_msg, start_byte, end_byte), status=status_code, headers=headers)
-    except Exception as e:
-        logger.error(f"Streaming Error: {str(e)}")
-        return "Internal Server Error", 500
-
 # --- Bot Events ---
 @client.on(events.NewMessage(incoming=True, func=lambda e: e.media))
 async def handle_media(event):
@@ -216,26 +225,17 @@ async def handle_media(event):
     prog = await event.respond("🔄 **Link එක සකසමින් පවතී...**")
     forwarded = await client.forward_messages(BIN_CHANNEL, event.message)
     web_link = f"{STREAM_URL}/view/{forwarded.id}"
-    
     await links_col.insert_one({"file_id": file_id, "file_name": event.file.name, "web_link": web_link})
     await prog.edit(f"✅ **සූදානම්!**\n🔗 {web_link}", link_preview=False)
 
-# --- Start Up Sequence (Fix for Disconnected Error) ---
+# --- Start Service ---
 async def start_services():
     await client.start(bot_token=BOT_TOKEN)
-    logger.info("✅ Telegram Bot Started!")
-
     from hypercorn.asyncio import serve
     from hypercorn.config import Config
-    
     config = Config()
     config.bind = [f"0.0.0.0:{os.environ.get('PORT', 8080)}"]
-    
-    logger.info("🚀 Web Server Starting on Hypercorn...")
     await serve(app, config)
 
 if __name__ == '__main__':
-    try:
-        asyncio.run(start_services())
-    except KeyboardInterrupt:
-        pass
+    asyncio.run(start_services())
