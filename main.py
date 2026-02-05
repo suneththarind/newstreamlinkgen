@@ -135,9 +135,11 @@ async def file_generator(file_msg, start, end):
             break
 
 # --- Stream Handler (CORS & OPTIONS support ඇතුළුව) ---
-@app.route('/download/<int:msg_id>', methods=['GET', 'OPTIONS'])
-@app.route('/watch/<int:msg_id>', methods=['GET', 'OPTIONS'])
-async def stream_handler(msg_id):
+@app.route('/download/<int:msg_id>')
+@app.route('/download/<int:msg_id>/<string:filename>', methods=['GET', 'OPTIONS'])
+@app.route('/watch/<int:msg_id>')
+@app.route('/watch/<int:msg_id>/<string:filename>', methods=['GET', 'OPTIONS'])
+async def stream_handler(msg_id, filename=None):
     if request.method == 'OPTIONS':
         return Response(status=204)
         
@@ -205,13 +207,15 @@ async def search():
     return await render_template_string(HTML_TEMPLATE, is_search=True, results=res, show_search=True, logo=LOGO_URL)
 
 @app.route('/view/<int:msg_id>')
-async def view_page(msg_id):
+@app.route('/view/<int:msg_id>/<string:filename>')
+async def view_page(msg_id, filename=None):
     try:
         file_msg = await client.get_messages(BIN_CHANNEL, ids=msg_id)
         if not file_msg or not file_msg.file: return redirect('/')
         name = file_msg.file.name or "video.mp4"
+        safe_name = urllib.parse.quote(name)
         size = round(file_msg.file.size / (1024 * 1024), 2)
-        return await render_template_string(HTML_TEMPLATE, is_view=True, title=name, name=name, size=size, show_search=True, dl_link=f"{STREAM_URL}/download/{msg_id}", stream_link=f"{STREAM_URL}/watch/{msg_id}", logo=LOGO_URL)
+        return await render_template_string(HTML_TEMPLATE, is_view=True, title=name, name=name, size=size, show_search=True, dl_link=f"{STREAM_URL}/download/{msg_id}/{safe_name}", stream_link=f"{STREAM_URL}/watch/{msg_id}/{safe_name}", logo=LOGO_URL)
     except: return redirect('/')
 
 # --- Bot Events ---
@@ -219,13 +223,21 @@ async def view_page(msg_id):
 async def handle_media(event):
     file_id = event.file.id
     existing = await links_col.find_one({"file_id": file_id})
+    
+    # දැනට ඇති file නම URL එකට ගැලපෙන සේ සකස් කිරීම
+    file_name = event.file.name or "file"
+    safe_name = urllib.parse.quote(file_name)
+
     if existing:
         return await event.respond(f"✅ **කලින් සකස් කළ Link එක:**\n🔗 {existing['web_link']}", link_preview=False)
 
     prog = await event.respond("🔄 **Link එක සකසමින් පවතී...**")
     forwarded = await client.forward_messages(BIN_CHANNEL, event.message)
-    web_link = f"{STREAM_URL}/view/{forwarded.id}"
-    await links_col.insert_one({"file_id": file_id, "file_name": event.file.name, "web_link": web_link})
+    
+    # ලින්ක් එකේ අගට නම එකතු කිරීම
+    web_link = f"{STREAM_URL}/view/{forwarded.id}/{safe_name}"
+    
+    await links_col.insert_one({"file_id": file_id, "file_name": file_name, "web_link": web_link})
     await prog.edit(f"✅ **සූදානම්!**\n🔗 {web_link}", link_preview=False)
 
 # --- Start Service ---
