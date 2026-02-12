@@ -1,22 +1,19 @@
 import os
 import logging
-import urllib.parse
 import asyncio
 import time
 import psutil
 from datetime import datetime
 from telethon import TelegramClient, events
-from quart import Quart, Response, request, render_template_string, redirect, session
+from quart import Quart, Response, request, render_template_string, redirect, url_for, session
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 
-# Logging setup
+# --- Configurations ---
+load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-load_dotenv()
-
-# --- Config ---
 API_ID = int(os.getenv('API_ID'))
 API_HASH = os.getenv('API_HASH')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -24,7 +21,7 @@ BIN_CHANNEL = int(os.getenv('BIN_CHANNEL'))
 STREAM_URL = os.getenv('STREAM_URL', '').rstrip('/')
 MONGO_URI = os.getenv('MONGO_URI')
 LOGO_URL = "https://image2url.com/r2/default/images/1769709206740-5b40868a-02c0-4c63-9db9-c5e68c0733b0.jpg"
-ADMIN_PASSWORD = "Menushabaduwa"
+ADMIN_PASSWORD = "Menushabaduwa" # මෙතනින් පාස්වර්ඩ් එක වෙනස් කරන්න පුළුවන්
 START_TIME = time.time()
 
 # Database Setup
@@ -33,19 +30,19 @@ db = db_client['telegram_bot']
 links_col = db['file_links']
 
 app = Quart(__name__)
-app.secret_key = "cinecloud_ultra_stable_v4"
-client = TelegramClient('bot', API_ID, API_HASH)
+app.secret_key = "cinecloud_secure_v5"
+client = TelegramClient('bot_session', API_ID, API_HASH)
 
-# --- 🛠️ CORS & Access Control (මෙය ඉතා වැදගත්) ---
+# --- 🛠️ CORS & Access Control ---
 @app.after_request
 async def add_cors_headers(response):
     response.headers['Access-Control-Allow-Origin'] = '*'
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Range, Authorization'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Range'
     response.headers['Access-Control-Expose-Headers'] = 'Content-Range, Content-Length, Accept-Ranges'
     return response
 
-# --- UI HTML ---
+# --- UI Template (Admin Secure Version) ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="en">
@@ -56,129 +53,71 @@ HTML_TEMPLATE = """
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;800&display=swap" rel="stylesheet">
     <style>
         :root { --primary-red: #e50914; --deep-dark: #050505; }
-        body { font-family: 'Poppins', sans-serif; background: var(--deep-dark); background-image: radial-gradient(circle at top right, #2a0202, transparent); color: #fff; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
-        .logo { width: 85px; height: 85px; border-radius: 50%; margin-bottom: 20px; border: 2px solid var(--primary-red); box-shadow: 0 0 20px rgba(229, 9, 20, 0.5); }
-        .container { background: rgba(255, 255, 255, 0.06); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px); padding: 30px; border-radius: 30px; width: 100%; max-width: 650px; border: 1px solid rgba(255, 255, 255, 0.1); text-align: center; }
-        .search-box { width: 100%; max-width: 500px; margin-bottom: 25px; display: {{ 'block' if show_search else 'none' }}; }
-        .search-box input { width: 100%; padding: 12px 20px; border-radius: 50px; border: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.08); color: #fff; outline: none; text-align: center; font-family: inherit; }
-        .home-msg { font-weight: 800; font-size: 26px; text-transform: uppercase; letter-spacing: 3px; text-shadow: 0 0 15px var(--primary-red); margin: 60px 0; }
-        .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 20px; }
-        .btn { padding: 13px; border-radius: 50px; text-decoration: none; font-weight: 600; font-size: 13px; cursor: pointer; border: none; color: #fff; transition: 0.3s; text-align: center; }
-        .btn-dl { background: rgba(229, 9, 20, 0.6); border: 1px solid rgba(255, 255, 255, 0.1); }
-        .btn-cp { background: rgba(255, 255, 255, 0.12); border: 1px solid rgba(255, 255, 255, 0.05); }
-        .btn-vlc { background: rgba(255, 136, 0, 0.35); grid-column: span 2; border: 1px solid rgba(255, 136, 0, 0.1); }
-        .btn:hover { transform: translateY(-3px); background: var(--primary-red); }
-        .stat-box { background: rgba(255,255,255,0.05); padding: 15px; border-radius: 15px; border: 1px solid rgba(229, 9, 20, 0.2); min-width: 120px; }
+        body { font-family: 'Poppins', sans-serif; background: var(--deep-dark); color: #fff; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
+        .logo { width: 85px; height: 85px; border-radius: 50%; margin-bottom: 20px; border: 2px solid var(--primary-red); }
+        .container { background: rgba(255, 255, 255, 0.06); backdrop-filter: blur(15px); padding: 30px; border-radius: 30px; width: 100%; max-width: 650px; border: 1px solid rgba(255, 255, 255, 0.1); text-align: center; }
+        .btn { padding: 13px 25px; border-radius: 50px; text-decoration: none; font-weight: 600; cursor: pointer; border: none; color: #fff; transition: 0.3s; display: inline-block; margin: 10px; }
+        .btn-dl { background: var(--primary-red); }
+        .search-input { width: 80%; padding: 12px; border-radius: 25px; border: none; background: rgba(255,255,255,0.1); color: white; margin-bottom: 15px; }
+        .file-list { text-align: left; margin-top: 20px; }
+        .file-item { padding: 10px; border-bottom: 1px solid #333; }
+        .file-item a { color: #ddd; text-decoration: none; font-size: 14px; }
     </style>
 </head>
 <body>
     <img src="{{ logo }}" class="logo">
-    <div class="search-box"><form action="/search" method="get"><input type="text" name="q" placeholder="Search Movies..." autocomplete="off"></form></div>
     <div class="container">
         {% if is_login %}
-            <h2 style="color:var(--primary-red)">🔐 Admin Login</h2>
-            <form method="post"><input type="password" name="pw" style="width:80%; padding:10px; border-radius:20px; border:none; margin-bottom:10px;" placeholder="Password"><br><button type="submit" class="btn btn-dl">Login</button></form>
+            <h2 style="color:var(--primary-red)">🔐 Admin Access</h2>
+            <form method="post">
+                <input type="password" name="pw" class="search-input" placeholder="Enter Password">
+                <br><button type="submit" class="btn btn-dl">Login</button>
+            </form>
+            {% if err %}<p style="color:red">{{ err }}</p>{% endif %}
         {% elif is_admin %}
-            <h2 style="color:var(--primary-red)">🚀 Admin Dashboard</h2>
-            <div style="display:flex; justify-content:center; gap:10px; flex-wrap:wrap;">
-                <div class="stat-box"><h3>{{ total_files }}</h3><p>Files</p></div>
-                <div class="stat-box"><h3>{{ ping }}ms</h3><p>Ping</p></div>
-                <div class="stat-box"><h3>{{ cpu }}%</h3><p>CPU</p></div>
-                <div class="stat-box"><h3>{{ ram }}%</h3><p>RAM</p></div>
+            <h2 style="color:var(--primary-red)">🚀 Dashboard</h2>
+            <p>Total Files: {{ total_files }} | RAM: {{ ram }}%</p>
+            <hr style="opacity:0.2">
+            <h3>🔍 Secure Search</h3>
+            <form action="/admin" method="get">
+                <input type="text" name="q" class="search-input" placeholder="Search files in DB...">
+                <button type="submit" class="btn btn-dl" style="padding: 8px 15px;">Search</button>
+            </form>
+            <div class="file-list">
+                {% for r in results %}
+                    <div class="file-item"><a href="{{ r.web_link }}">🎬 {{ r.file_name }}</a></div>
+                {% endfor %}
             </div>
-            <p>Uptime: {{ uptime }}</p><br><a href="/logout" style="color:#888;">Logout</a>
-        {% elif is_search %}
-            <h3>🔍 Search Results</h3>
-            {% for r in results %}<div style="text-align:left; padding:12px; border-bottom:1px solid #333;"><a href="{{ r.web_link }}" style="color:#ddd; text-decoration:none;">🎬 {{ r.file_name }}</a></div>{% else %}<p>No files found.</p>{% endfor %}
-            <br><a href="/" class="btn btn-cp">Back Home</a>
+            <br><a href="/logout" style="color:#888;">Logout</a>
         {% elif is_view %}
-            <h3>{{ name }}</h3><div style="font-size:11px; color:#aaa; margin-bottom:15px;">{{ size }} MB</div>
-            <div style="margin:20px 0; border-radius:18px; overflow:hidden; background:#000; border:1px solid rgba(255,255,255,0.05);">
+            <h3>{{ name }}</h3>
+            <p style="color:#aaa;">Size: {{ size }} MB</p>
+            <div style="margin:20px 0; border-radius:18px; overflow:hidden; background:#000;">
                 <video id="player" playsinline controls><source src="{{ stream_link }}" type="video/mp4"></video>
             </div>
-            <div class="btn-group">
-                <a href="{{ dl_link }}" class="btn btn-dl">📥 Download Now</a>
-                <button onclick="cp('{{ dl_link }}', this)" class="btn btn-cp">📋 Copy Link</button>
-                <a href="intent:{{ stream_link }}#Intent;package=org.videolan.vlc;end" class="btn btn-vlc">🧡 Play in VLC Player</a>
-            </div>
+            <a href="{{ dl_link }}" class="btn btn-dl">📥 High Speed Download</a>
         {% else %}
-            <div class="home-msg">CINECLOUD IS ONLINE</div>
+            <h2 style="letter-spacing: 5px;">CINECLOUD</h2>
+            <p>Bot is active and secure.</p>
+            <a href="/admin" class="btn btn-dl">Admin Login</a>
         {% endif %}
     </div>
     <script src="https://cdn.plyr.io/3.7.8/plyr.js"></script>
-    <script>
-        const player = new Plyr('#player');
-        function cp(u,b){
-            navigator.clipboard.writeText(u);
-            const t = b.innerText; b.innerText="✅ Copied!";
-            setTimeout(()=>b.innerText=t, 2000);
-        }
-    </script>
+    <script>const player = new Plyr('#player');</script>
 </body>
 </html>
 """
 
-# --- 🚀 පරණ ස්ථාවර Generator එක ---
+# --- 🚀 High-Speed Heroku Optimized Generator ---
 async def file_generator(file_msg, start, end):
-    CHUNK_SIZE = 1024 * 1024  # 1MB
-    offset = start
-    while offset <= end:
-        remaining = end - offset + 1
-        current_limit = min(CHUNK_SIZE, remaining)
-        try:
-            async for chunk in client.iter_download(file_msg.media, offset=offset, limit=current_limit, request_size=CHUNK_SIZE):
-                yield chunk
-                offset += len(chunk)
-            if current_limit == 0: break
-        except Exception as e:
-            logger.error(f"Generator Error: {e}")
-            break
-
-# --- Stream Handler (CORS & OPTIONS support ඇතුළුව) ---
-@app.route('/download/<int:msg_id>')
-@app.route('/download/<int:msg_id>/<string:filename>', methods=['GET', 'OPTIONS'])
-@app.route('/watch/<int:msg_id>')
-@app.route('/watch/<int:msg_id>/<string:filename>', methods=['GET', 'OPTIONS'])
-async def stream_handler(msg_id, filename=None):
-    if request.method == 'OPTIONS':
-        return Response(status=204)
-        
+    chunk_size = 1024 * 1024  # 1MB
     try:
-        file_msg = await client.get_messages(BIN_CHANNEL, ids=msg_id)
-        if not file_msg or not file_msg.file: return "File Not Found", 404
-
-        file_size = file_msg.file.size
-        range_header = request.headers.get('Range', None)
-        start_byte = 0
-        end_byte = file_size - 1
-
-        if range_header:
-            range_parts = range_header.replace('bytes=', '').split('-')
-            start_byte = int(range_parts[0])
-            if range_parts[1]: end_byte = int(range_parts[1])
-
-        headers = {
-            'Content-Type': file_msg.file.mime_type or 'application/octet-stream',
-            'Accept-Ranges': 'bytes',
-            'Content-Length': str(end_byte - start_byte + 1),
-            'Content-Disposition': f'attachment; filename="{file_msg.file.name}"',
-        }
-
-        status_code = 200
-        if range_header:
-            headers['Content-Range'] = f'bytes {start_byte}-{end_byte}/{file_size}'
-            status_code = 206
-
-        return Response(file_generator(file_msg, start_byte, end_byte), status=status_code, headers=headers)
+        async for chunk in client.iter_download(file_msg.media, offset=start, request_size=chunk_size, limit=end - start + 1):
+            yield chunk
     except Exception as e:
-        logger.error(f"Streaming Error: {str(e)}")
-        return "Internal Server Error", 500
+        logger.error(f"Stream/Download Error: {e}")
 
 # --- Web Routes ---
-@app.route('/')
-async def index():
-    return await render_template_string(HTML_TEMPLATE, is_view=False, show_search=False, logo=LOGO_URL)
-
 @app.route('/admin', methods=['GET', 'POST'])
 async def admin():
     if request.method == 'POST':
@@ -186,68 +125,101 @@ async def admin():
         if form.get('pw') == ADMIN_PASSWORD:
             session['admin'] = True
             return redirect('/admin')
-    if not session.get('admin'): return await render_template_string(HTML_TEMPLATE, is_login=True, logo=LOGO_URL)
+        return await render_template_string(HTML_TEMPLATE, is_login=True, err="Invalid Password", logo=LOGO_URL)
     
-    start_p = time.time()
-    await links_col.find_one()
-    ping = round((time.time() - start_p) * 1000)
-    uptime = str(datetime.now() - datetime.fromtimestamp(START_TIME)).split('.')[0]
+    if not session.get('admin'):
+        return await render_template_string(HTML_TEMPLATE, is_login=True, logo=LOGO_URL)
+    
+    # Search logic inside Admin
+    query = request.args.get('q', '')
+    results = []
+    if query:
+        results = await links_col.find({"file_name": {"$regex": query, "$options": "i"}}).limit(20).to_list(20)
+    
     total = await links_col.count_documents({})
-    return await render_template_string(HTML_TEMPLATE, is_admin=True, total_files=total, ping=ping, cpu=psutil.cpu_percent(), ram=psutil.virtual_memory().percent, uptime=uptime, logo=LOGO_URL)
+    return await render_template_string(HTML_TEMPLATE, is_admin=True, total_files=total, ram=psutil.virtual_memory().percent, results=results, logo=LOGO_URL)
 
 @app.route('/logout')
 async def logout():
     session.pop('admin', None)
     return redirect('/')
 
-@app.route('/search')
-async def search():
-    q = request.args.get('q', '')
-    res = await links_col.find({"file_name": {"$regex": q, "$options": "i"}}).limit(20).to_list(20) if q else []
-    return await render_template_string(HTML_TEMPLATE, is_search=True, results=res, show_search=True, logo=LOGO_URL)
-
 @app.route('/view/<int:msg_id>')
-@app.route('/view/<int:msg_id>/<string:filename>')
-async def view_page(msg_id, filename=None):
-    try:
-        file_msg = await client.get_messages(BIN_CHANNEL, ids=msg_id)
-        if not file_msg or not file_msg.file: return redirect('/')
-        name = file_msg.file.name or "video.mp4"
-        safe_name = urllib.parse.quote(name)
-        size = round(file_msg.file.size / (1024 * 1024), 2)
-        return await render_template_string(HTML_TEMPLATE, is_view=True, title=name, name=name, size=size, show_search=True, dl_link=f"{STREAM_URL}/download/{msg_id}/{safe_name}", stream_link=f"{STREAM_URL}/watch/{msg_id}/{safe_name}", logo=LOGO_URL)
-    except: return redirect('/')
+async def view_page(msg_id):
+    file_msg = await client.get_messages(BIN_CHANNEL, ids=msg_id)
+    if not file_msg: return redirect('/')
+    name = file_msg.file.name
+    clean_name = name.replace(" ", "_")
+    size = round(file_msg.file.size / (1024 * 1024), 2)
+    return await render_template_string(HTML_TEMPLATE, is_view=True, name=name, size=size, logo=LOGO_URL,
+                                       dl_link=f"{STREAM_URL}/download/{msg_id}/{clean_name}",
+                                       stream_link=f"{STREAM_URL}/watch/{msg_id}/{clean_name}")
 
-# --- Bot Events ---
+@app.route('/download/<int:msg_id>/<path:file_name>')
+@app.route('/watch/<int:msg_id>/<path:file_name>')
+async def stream_handler(msg_id, file_name):
+    file_msg = await client.get_messages(BIN_CHANNEL, ids=msg_id)
+    if not file_msg: return "Not Found", 404
+    
+    file_size = file_msg.file.size
+    range_header = request.headers.get('Range', None)
+    start_byte = int(range_header.replace('bytes=', '').split('-')[0]) if range_header else 0
+    
+    headers = {
+        'Content-Type': file_msg.file.mime_type or 'application/octet-stream',
+        'Accept-Ranges': 'bytes',
+        'Content-Length': str(file_size - start_byte),
+        'Content-Disposition': f'attachment; filename="{file_msg.file.name}"',
+        'Connection': 'keep-alive'
+    }
+    
+    status = 206 if range_header else 200
+    if range_header: headers['Content-Range'] = f'bytes {start_byte}-{file_size-1}/{file_size}'
+    
+    return Response(file_generator(file_msg, start_byte, file_size-1), status=status, headers=headers)
+
+@app.route('/')
+async def index():
+    return await render_template_string(HTML_TEMPLATE, is_view=False, logo=LOGO_URL)
+
+# --- Bot Events (MongoDB Integrated) ---
 @client.on(events.NewMessage(incoming=True, func=lambda e: e.media))
 async def handle_media(event):
-    file_id = event.file.id
-    existing = await links_col.find_one({"file_id": file_id})
-    
-    # දැනට ඇති file නම URL එකට ගැලපෙන සේ සකස් කිරීම
-    file_name = event.file.name or "file"
-    safe_name = urllib.parse.quote(file_name)
+    try:
+        file_name = event.file.name or "file.mp4"
+        clean_name = file_name.replace(" ", "_")
+        
+        # Check Duplicate
+        existing = await links_col.find_one({"file_name": file_name})
+        if existing:
+            return await event.respond(f"✅ **Duplicate Found:**\n🔗 {existing['web_link']}", link_preview=False)
 
-    if existing:
-        return await event.respond(f"✅ **කලින් සකස් කළ Link එක:**\n🔗 {existing['web_link']}", link_preview=False)
+        prog = await event.respond("🔄 **Generating Private Links...**")
+        forwarded = await client.forward_messages(BIN_CHANNEL, event.message)
+        
+        web_link = f"{STREAM_URL}/view/{forwarded.id}"
+        dl_link = f"{STREAM_URL}/download/{forwarded.id}/{clean_name}"
+        
+        # Save to MongoDB
+        await links_col.insert_one({
+            "msg_id": forwarded.id, 
+            "file_name": file_name, 
+            "web_link": web_link,
+            "date": datetime.now()
+        })
+        
+        await prog.edit(f"🎬 **File:** `{file_name}`\n\n🌐 **Player:** {web_link}\n📥 **Download:** {dl_link}", link_preview=False)
+    except Exception as e:
+        logger.error(f"Bot Error: {e}")
 
-    prog = await event.respond("🔄 **Link එක සකසමින් පවතී...**")
-    forwarded = await client.forward_messages(BIN_CHANNEL, event.message)
-    
-    # ලින්ක් එකේ අගට නම එකතු කිරීම
-    web_link = f"{STREAM_URL}/view/{forwarded.id}/{safe_name}"
-    
-    await links_col.insert_one({"file_id": file_id, "file_name": file_name, "web_link": web_link})
-    await prog.edit(f"✅ **සූදානම්!**\n🔗 {web_link}", link_preview=False)
-
-# --- Start Service ---
-async def start_services():
+# --- Start ---
+async def main():
     await client.start(bot_token=BOT_TOKEN)
     from hypercorn.asyncio import serve
     from hypercorn.config import Config
     config = Config()
-    config.bind = [f"0.0.0.0:{os.environ.get('PORT', 8080)}"]
+    config.bind = ["0.0.0.0:" + os.environ.get("PORT", "8080")]
     await serve(app, config)
 
 if __name__ == '__main__':
-    asyncio.run(start_services())
+    asyncio.run(main())
