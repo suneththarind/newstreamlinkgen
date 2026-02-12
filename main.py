@@ -1,214 +1,146 @@
 import os
 import logging
-import urllib.parse
 import asyncio
-import psutil
-import time
+import mimetypes
+from datetime import datetime
+from aiohttp import web
 from telethon import TelegramClient, events
-from quart import Quart, Response, request, render_template_string, redirect, session
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 
-# Logging setup
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# --- Setup ---
+load_dotenv()
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-load_dotenv()
-
-# --- Config ---
 API_ID = int(os.getenv('API_ID'))
 API_HASH = os.getenv('API_HASH')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 BIN_CHANNEL = int(os.getenv('BIN_CHANNEL'))
 STREAM_URL = os.getenv('STREAM_URL').rstrip('/')
 MONGO_URI = os.getenv('MONGO_URI')
-ADMIN_PASSWORD = "Menushabaduwa" # මෙය අවශ්‍ය නම් වෙනස් කරන්න
+ADMIN_PASSWORD = "Menushabaduwa"
 LOGO_URL = "https://image2url.com/r2/default/images/1769709206740-5b40868a-02c0-4c63-9db9-c5e68c0733b0.jpg"
 
-app = Quart(__name__)
-app.secret_key = "secure_cinecloud_final_fixed"
-
-# Database Setup
+# Database & Client
 db_client = AsyncIOMotorClient(MONGO_URI)
-db = db_client['telegram_bot']
-links_col = db['file_links']
-
-# Telethon Client
+links_col = db_client['telegram_bot']['file_links']
 client = TelegramClient('bot_session', API_ID, API_HASH)
 
-# --- UI Template ---
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ title if title else 'CineCloud' }}</title>
-    <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;800&display=swap" rel="stylesheet">
-    <style>
-        :root { --primary-red: #e50914; --deep-dark: #050505; }
-        body { font-family: 'Poppins', sans-serif; background: var(--deep-dark); color: #fff; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; min-height: 100vh; }
-        .logo { width: 85px; border-radius: 50%; margin-bottom: 20px; border: 2px solid var(--primary-red); }
-        .container { background: rgba(255, 255, 255, 0.06); backdrop-filter: blur(15px); padding: 30px; border-radius: 30px; width: 100%; max-width: 650px; border: 1px solid rgba(255, 255, 255, 0.1); text-align: center; }
-        .btn { padding: 13px 25px; border-radius: 50px; text-decoration: none; font-weight: 600; cursor: pointer; border: none; color: #fff; display: inline-block; margin: 10px; transition: 0.3s; background: var(--primary-red); }
-        .search-input { width: 85%; padding: 12px; border-radius: 25px; border: none; background: rgba(255,255,255,0.1); color: white; margin-bottom: 15px; text-align: center; }
-        .file-list { text-align: left; margin-top: 20px; max-height: 300px; overflow-y: auto; }
-        .file-item { padding: 12px; border-bottom: 1px solid #333; }
-        .file-item a { color: #ddd; text-decoration: none; font-size: 14px; }
-        video { width: 100%; border-radius: 18px; }
-    </style>
-</head>
-<body>
-    <img src="{{ logo }}" class="logo">
-    <div class="container">
-        {% if is_login %}
-            <h2 style="color:var(--primary-red)">🔐 Admin Login</h2>
-            <form method="post"><input type="password" name="pw" class="search-input" placeholder="Password"><br><button type="submit" class="btn">Login</button></form>
-        {% elif is_admin %}
-            <h2 style="color:var(--primary-red)">🚀 Admin Dashboard</h2>
-            <form action="/admin" method="get"><input type="text" name="q" class="search-input" placeholder="Search Files..."><br><button type="submit" class="btn">Search</button></form>
-            <div class="file-list">
-                {% for r in results %}<div class="file-item"><a href="{{ r.web_link }}">🎬 {{ r.file_name }}</a></div>{% endfor %}
-            </div>
-            <p style="font-size: 12px; color: #777; margin-top: 15px;">Total Files: {{ total_files }} | RAM: {{ ram }}%</p>
-            <a href="/logout" style="color:#555; font-size: 12px;">Logout</a>
-        {% elif is_view %}
-            <h3>{{ name }}</h3>
-            <p style="color:#aaa;">Size: {{ size }} MB</p>
-            <video id="player" playsinline controls><source src="{{ stream_link }}" type="video/mp4"></video>
-            <br><a href="{{ dl_link }}" class="btn">📥 Stable High Speed Download</a>
-        {% else %}
-            <h1 style="letter-spacing: 5px; color: var(--primary-red);">CINECLOUD</h1>
-            <p>Direct Download Server is Online!</p>
-            <a href="/admin" class="btn">Admin Login</a>
-        {% endif %}
-    </div>
-    <script src="https://cdn.plyr.io/3.7.8/plyr.js"></script>
-    <script>const player = new Plyr('#player');</script>
-</body>
-</html>
-"""
+# --- 🛰️ Ultra Fast Stream Logic (The fyaz05 method) ---
+async def stream_handler(request):
+    msg_id = int(request.match_info['msg_id'])
+    file_msg = await client.get_messages(BIN_CHANNEL, ids=msg_id)
+    
+    if not file_msg or not file_msg.file:
+        return web.Response(text="File Not Found", status=404)
 
-# --- 🛠️ Optimized Stable Generator ---
-async def file_generator(file_msg, start, end):
-    CHUNK_SIZE = 1024 * 1024  # 1MB
-    offset = start
-    while offset <= end:
-        remaining = end - offset + 1
-        current_limit = min(CHUNK_SIZE, remaining)
-        try:
-            async for chunk in client.iter_download(
-                file_msg.media,
-                offset=offset,
-                limit=current_limit,
-                request_size=CHUNK_SIZE
-            ):
-                yield chunk
-                offset += len(chunk)
-            if current_limit == 0: break
-        except Exception as e:
-            logger.error(f"Error while generating chunks: {e}")
-            break
+    file_size = file_msg.file.size
+    name = file_msg.file.name or f"file_{msg_id}.mp4"
+    mime_type = mimetypes.guess_type(name)[0] or 'application/octet-stream'
+    
+    range_header = request.headers.get('Range')
+    start_byte = 0
+    end_byte = file_size - 1
+
+    if range_header:
+        parts = range_header.replace('bytes=', '').split('-')
+        start_byte = int(parts[0])
+        if parts[1]: end_byte = int(parts[1])
+
+    # 🛑 Direct Stream Headers (fyaz05 style)
+    resp = web.StreamResponse(status=206 if range_header else 200)
+    resp.headers['Content-Type'] = mime_type
+    resp.headers['Content-Length'] = str(end_byte - start_byte + 1)
+    resp.headers['Accept-Ranges'] = 'bytes'
+    resp.headers['Content-Disposition'] = f'attachment; filename="{name}"'
+    if range_header:
+        resp.headers['Content-Range'] = f'bytes {start_byte}-{end_byte}/{file_size}'
+    
+    await resp.prepare(request)
+
+    # High-speed data pumping
+    try:
+        async for chunk in client.iter_download(
+            file_msg.media, 
+            offset=start_byte, 
+            request_size=512 * 1024, # 512KB chunks for stability
+            limit=end_byte - start_byte + 1
+        ):
+            await resp.write(chunk)
+    except Exception as e:
+        logger.error(f"Stream error: {e}")
+    
+    return resp
+
+# --- 🖼️ UI Helper ---
+def get_html(content):
+    return f"""
+    <html><head><title>CineCloud</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins&display=swap" rel="stylesheet">
+    <style>
+        body {{ background: #050505; color: white; font-family: 'Poppins', sans-serif; text-align: center; padding: 40px; }}
+        .box {{ background: #111; padding: 30px; border-radius: 20px; max-width: 500px; margin: auto; border: 1px solid #333; }}
+        .btn {{ display: inline-block; padding: 12px 25px; background: #e50914; color: white; text-decoration: none; border-radius: 50px; font-weight: bold; margin: 10px; }}
+        input {{ width: 80%; padding: 10px; border-radius: 20px; border: none; margin-bottom: 10px; text-align: center; }}
+    </style></head><body>
+    <img src="{LOGO_URL}" style="width:80px; border-radius:50%; border:2px solid #e50914; margin-bottom:15px;">
+    <div class="box">{content}</div></body></html>"""
 
 # --- Web Routes ---
-@app.route('/download/<int:msg_id>/<path:file_name>')
-@app.route('/watch/<int:msg_id>/<path:file_name>')
-async def stream_handler(msg_id, file_name):
-    try:
-        file_msg = await client.get_messages(BIN_CHANNEL, ids=msg_id)
-        if not file_msg or not file_msg.file: return "File Not Found", 404
-
-        file_size = file_msg.file.size
-        range_header = request.headers.get('Range', None)
-        start_byte = 0
-        end_byte = file_size - 1
-
-        if range_header:
-            range_parts = range_header.replace('bytes=', '').split('-')
-            start_byte = int(range_parts[0])
-            if range_parts[1]: end_byte = int(range_parts[1])
-
-        headers = {
-            'Content-Type': file_msg.file.mime_type or 'application/octet-stream',
-            'Accept-Ranges': 'bytes',
-            'Content-Length': str(end_byte - start_byte + 1),
-            'Cache-Control': 'no-cache',
-            'Content-Disposition': f'attachment; filename="{file_msg.file.name}"',
-        }
-
-        status = 206 if range_header else 200
-        if range_header: headers['Content-Range'] = f'bytes {start_byte}-{end_byte}/{file_size}'
-
-        return Response(file_generator(file_msg, start_byte, end_byte), status=status, headers=headers)
-    except Exception as e:
-        logger.error(f"Streaming Error: {e}")
-        return "Internal Error", 500
-
-@app.route('/view/<int:msg_id>')
-async def view_page(msg_id):
-    file_msg = await client.get_messages(BIN_CHANNEL, ids=msg_id)
-    if not file_msg: return redirect('/')
-    name = file_msg.file.name
-    clean_name = name.replace(" ", "_")
-    size = round(file_msg.file.size / (1024 * 1024), 2)
-    return await render_template_string(HTML_TEMPLATE, is_view=True, name=name, size=size, logo=LOGO_URL,
-                                       dl_link=f"{STREAM_URL}/download/{msg_id}/{clean_name}",
-                                       stream_link=f"{STREAM_URL}/watch/{msg_id}/{clean_name}")
-
-@app.route('/admin', methods=['GET', 'POST'])
-async def admin():
-    if request.method == 'POST':
-        form = await request.form
-        if form.get('pw') == ADMIN_PASSWORD:
-            session['admin'] = True
-            return redirect('/admin')
-    if not session.get('admin'): return await render_template_string(HTML_TEMPLATE, is_login=True, logo=LOGO_URL)
+async def admin_page(request):
+    data = await request.post()
+    if data.get('pw') == ADMIN_PASSWORD:
+        resp = web.Response(text=get_html("<h2>Login Success</h2><a href='/dashboard' class='btn'>Go to Dashboard</a>"), content_type='text/html')
+        resp.set_cookie('admin_session', 'active', max_age=3600)
+        return resp
     
-    query = request.args.get('q', '')
-    results = await links_col.find({"file_name": {"$regex": query, "$options": "i"}}).to_list(20) if query else []
-    total = await links_col.count_documents({})
-    return await render_template_string(HTML_TEMPLATE, is_admin=True, results=results, total_files=total, ram=psutil.virtual_memory().percent, logo=LOGO_URL)
+    q = request.query.get('q', '')
+    if request.cookies.get('admin_session') == 'active':
+        results = await links_col.find({"file_name": {"$regex": q, "$options": "i"}}).to_list(10) if q else []
+        res_html = "".join([f"<p style='font-size:12px;'>🎬 <a href='{r['web_link']}' style='color:#ccc;'>{r['file_name']}</a></p>" for r in results])
+        return web.Response(text=get_html(f"<h3>Search Files</h3><form><input name='q' placeholder='Search...'><br><button class='btn'>Search</button></form>{res_html}"), content_type='text/html')
 
-@app.route('/logout')
-async def logout():
-    session.pop('admin', None)
-    return redirect('/')
+    return web.Response(text=get_html(f"<h3>Admin Login</h3><form method='post'><input type='password' name='pw' placeholder='Password'><br><button class='btn'>Login</button></form>"), content_type='text/html')
 
-@app.route('/')
-async def index(): return await render_template_string(HTML_TEMPLATE, logo=LOGO_URL)
+async def view_page(request):
+    msg_id = int(request.match_info['msg_id'])
+    file_msg = await client.get_messages(BIN_CHANNEL, ids=msg_id)
+    if not file_msg: return web.Response(text="Not Found")
+    name = file_msg.file.name
+    dl = f"{STREAM_URL}/download/{msg_id}/{name.replace(' ', '_')}"
+    return web.Response(text=get_html(f"<h3>{name}</h3><video controls style='width:100%; border-radius:10px;'><source src='{dl}'></video><br><a href='{dl}' class='btn'>📥 STABLE DOWNLOAD</a>"), content_type='text/html')
 
-# --- Bot Events ---
+async def index(request):
+    return web.Response(text=get_html("<h1>CineCloud Online</h1><p>Send a file to bot to get links.</p><a href='/admin' class='btn'>Admin Login</a>"), content_type='text/html')
+
+# --- Bot Logic ---
 @client.on(events.NewMessage(incoming=True, func=lambda e: e.media))
 async def handle_media(event):
-    prog = await event.respond("🔄 Processing...")
-    try:
-        forwarded = await client.forward_messages(BIN_CHANNEL, event.message)
-        file_name = event.file.name or "video.mp4"
-        web_link = f"{STREAM_URL}/view/{forwarded.id}"
-        dl_link = f"{STREAM_URL}/download/{forwarded.id}/{file_name.replace(' ', '_')}"
-        
-        await links_col.insert_one({"msg_id": forwarded.id, "file_name": file_name, "web_link": web_link})
-        await prog.edit(f"🎬 **File:** `{file_name}`\n\n📥 **Download:** {dl_link}\n🌐 **Web Player:** {web_link}", link_preview=False)
-    except Exception as e:
-        logger.error(f"Bot Error: {e}")
+    name = event.file.name or "file.mp4"
+    fwd = await client.forward_messages(BIN_CHANNEL, event.message)
+    web_link = f"{STREAM_URL}/view/{fwd.id}"
+    await links_col.insert_one({"msg_id": fwd.id, "file_name": name, "web_link": web_link})
+    await event.respond(f"🎬 **File:** `{name}`\n\n🌐 **Player:** {web_link}", link_preview=False)
 
-# --- Main Run (FIXED FOR HEROKU CONNECTION) ---
-async def start_everything():
-    # 1. Start Telethon
+# --- Start Everything ---
+async def main():
     await client.start(bot_token=BOT_TOKEN)
-    logger.info("✅ Telegram Bot Connected!")
+    app = web.Application()
+    app.add_routes([
+        web.get('/', index),
+        web.get('/admin', admin_page),
+        web.post('/admin', admin_page),
+        web.get('/view/{msg_id}', view_page),
+        web.get('/download/{msg_id}/{name}', stream_handler),
+        web.get('/watch/{msg_id}/{name}', stream_handler)
+    ])
     
-    # 2. Start Web Server in Background
-    port = int(os.environ.get('PORT', 8080))
-    loop = asyncio.get_event_loop()
-    loop.create_task(app.run_task(host='0.0.0.0', port=port))
-    logger.info(f"✅ Web Server running on port {port}")
-    
-    # 3. Keep running
-    await client.run_until_disconnected()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', int(os.environ.get('PORT', 8080)))
+    await site.start()
+    await asyncio.Event().wait()
 
 if __name__ == '__main__':
-    try:
-        asyncio.run(start_everything())
-    except KeyboardInterrupt:
-        pass
+    client.loop.run_until_complete(main())
