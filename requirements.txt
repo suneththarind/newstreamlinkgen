@@ -7,3 +7,4 @@ aiohttp
 motor
 psutil
 hypercorn
+aiohttp
