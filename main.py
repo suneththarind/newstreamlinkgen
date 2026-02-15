@@ -97,7 +97,7 @@ def get_html(content, title="CVCLOUD"):
     <img src="{LOGO_URL}" style="width:80px; border-radius:50%; border:2px solid #e50914;">
     <div class="box">{content}</div></body></html>"""
 
-# --- Admin Dashboard (Fixed Search Logic) ---
+# --- Admin Dashboard ---
 async def admin_handler(request):
     if request.method == 'POST':
         data = await request.post()
@@ -111,7 +111,6 @@ async def admin_handler(request):
         query = request.query.get('q', '').strip()
         results_html = ""
         if query:
-            # Case-insensitive search in file_name
             cursor = links_col.find({"file_name": {"$regex": query, "$options": "i"}})
             results = await cursor.to_list(length=50)
             if not results:
@@ -144,11 +143,11 @@ async def view_page(request):
         return web.Response(text=get_html(f"<h3>{name}</h3><video controls style='width:100%; border-radius:15px; background:#000;'><source src='{dl}'></video><br><a href='{dl}' class='btn'>📥 DOWNLOAD</a>"), content_type='text/html')
     except: return web.Response(text="Error loading player")
 
-# --- Media Handler (Clean Copy & Duplicate Check Fixed) ---
+# --- Media Handler (Corrected Telethon send_message keywords) ---
 @client.on(events.NewMessage(incoming=True, func=lambda e: e.media))
 async def handle_media(event):
     try:
-        # Fixed Unique ID Logic for Telethon
+        # File Unique ID
         if event.document:
             file_id = f"{event.document.id}_{event.document.dc_id}"
         elif event.photo:
@@ -156,25 +155,25 @@ async def handle_media(event):
         else:
             file_id = str(event.id)
 
-        # Check for Duplicate
+        # Duplicate Check
         existing = await links_col.find_one({"file_unique_id": file_id})
         if existing:
             web_link = f"{STREAM_URL}/view/{existing['msg_id']}"
             return await event.respond(f"♻️ **Already exists:** {web_link}", link_preview=False)
 
-        # Clean Copy to BIN_CHANNEL (No Forward mark)
-        bin_msg = await client.send_message(BIN_CHANNEL, file=event.message.media, caption=event.message.text)
+        # 1. Clean Copy to BIN_CHANNEL (Using 'message' instead of 'caption')
+        bin_msg = await client.send_message(BIN_CHANNEL, file=event.message.media, message=event.message.text)
         
-        # Clean Copy to BACKUP_CHANNEL
+        # 2. Clean Copy to BACKUP_CHANNEL
         if BACKUP_CHANNEL != BIN_CHANNEL:
             try:
-                await client.send_message(BACKUP_CHANNEL, file=event.message.media, caption=event.message.text)
+                await client.send_message(BACKUP_CHANNEL, file=event.message.media, message=event.message.text)
             except: pass
 
         web_link = f"{STREAM_URL}/view/{bin_msg.id}"
         file_name = event.file.name or "video.mp4"
 
-        # Save to Database
+        # Save to DB
         await links_col.insert_one({
             "msg_id": bin_msg.id, 
             "file_unique_id": file_id,
