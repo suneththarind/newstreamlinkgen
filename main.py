@@ -19,6 +19,7 @@ API_ID = int(os.getenv('API_ID'))
 API_HASH = os.getenv('API_HASH')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 BIN_CHANNEL = int(os.getenv('BIN_CHANNEL'))
+BACKUP_CHANNEL = int(os.getenv('BACKUP_CHANNEL', BIN_CHANNEL)) # .env එකේ නැත්නම් BIN එකම ගනී
 STREAM_URL = os.getenv('STREAM_URL', '').rstrip('/')
 MONGO_URI = os.getenv('MONGO_URI')
 ADMIN_PASSWORD = "Menushabaduwa"
@@ -96,7 +97,7 @@ def get_html(content, title="CVCLOUD"):
     <img src="{LOGO_URL}" style="width:80px; border-radius:50%; border:2px solid #e50914;">
     <div class="box">{content}</div></body></html>"""
 
-# --- Admin Dashboard (Fixed KeyError) ---
+# --- Admin Dashboard ---
 async def admin_handler(request):
     if request.method == 'POST':
         data = await request.post()
@@ -115,7 +116,7 @@ async def admin_handler(request):
             for r in results:
                 m_id = r.get('msg_id')
                 f_name = r.get('file_name', 'Unknown File')
-                if m_id: # Only show if msg_id exists
+                if m_id:
                     results_html += f"<div class='file-item'>🎬 <a href='/view/{m_id}'>{f_name}</a></div>"
         
         total = await links_col.count_documents({})
@@ -140,14 +141,37 @@ async def view_page(request):
         return web.Response(text=get_html(f"<h3>{name}</h3><video controls style='width:100%; border-radius:15px; background:#000;'><source src='{dl}'></video><br><a href='{dl}' class='btn'>📥 DOWNLOAD</a>"), content_type='text/html')
     except: return web.Response(text="Error loading player")
 
+# --- Optimized Media Handler (Duplicate Check & Clean Copy) ---
 @client.on(events.NewMessage(incoming=True, func=lambda e: e.media))
 async def handle_media(event):
     try:
-        fwd = await client.forward_messages(BIN_CHANNEL, event.message)
-        web_link = f"{STREAM_URL}/view/{fwd.id}"
-        await links_col.insert_one({"msg_id": fwd.id, "file_name": event.file.name or "video.mp4"})
+        # File Unique ID for duplicate check
+        file_id = event.file.emoji_id or event.document.id
+        existing = await links_col.find_one({"file_unique_id": file_id})
+        
+        if existing:
+            web_link = f"{STREAM_URL}/view/{existing['msg_id']}"
+            return await event.respond(f"♻️ **Already exists:** {web_link}", link_preview=False)
+
+        # 1. Clean Copy to BIN_CHANNEL (No Forward Label)
+        bin_msg = await client.send_message(BIN_CHANNEL, file=event.message.media, caption=event.message.text)
+        
+        # 2. Clean Copy to BACKUP_CHANNEL
+        if BACKUP_CHANNEL != BIN_CHANNEL:
+            await client.send_message(BACKUP_CHANNEL, file=event.message.media, caption=event.message.text)
+
+        web_link = f"{STREAM_URL}/view/{bin_msg.id}"
+        
+        # Store in Database
+        await links_col.insert_one({
+            "msg_id": bin_msg.id, 
+            "file_unique_id": file_id,
+            "file_name": event.file.name or "video.mp4"
+        })
+        
         await event.respond(f"✅ **Ready:** {web_link}", link_preview=False)
-    except: pass
+    except Exception as e:
+        logger.error(f"Handler Error: {e}")
 
 async def main():
     await client.start(bot_token=BOT_TOKEN)
