@@ -19,7 +19,7 @@ API_ID = int(os.getenv('API_ID'))
 API_HASH = os.getenv('API_HASH')
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 BIN_CHANNEL = int(os.getenv('BIN_CHANNEL'))
-BACKUP_CHANNEL = int(os.getenv('BACKUP_CHANNEL', BIN_CHANNEL)) # .env එකේ නැත්නම් BIN එකම ගනී
+BACKUP_CHANNEL = int(os.getenv('BACKUP_CHANNEL', BIN_CHANNEL))
 STREAM_URL = os.getenv('STREAM_URL', '').rstrip('/')
 MONGO_URI = os.getenv('MONGO_URI')
 ADMIN_PASSWORD = "Menushabaduwa"
@@ -97,7 +97,7 @@ def get_html(content, title="CVCLOUD"):
     <img src="{LOGO_URL}" style="width:80px; border-radius:50%; border:2px solid #e50914;">
     <div class="box">{content}</div></body></html>"""
 
-# --- Admin Dashboard ---
+# --- Admin Dashboard (Fixed Search Logic) ---
 async def admin_handler(request):
     if request.method == 'POST':
         data = await request.post()
@@ -111,16 +111,19 @@ async def admin_handler(request):
         query = request.query.get('q', '').strip()
         results_html = ""
         if query:
+            # Case-insensitive search in file_name
             cursor = links_col.find({"file_name": {"$regex": query, "$options": "i"}})
             results = await cursor.to_list(length=50)
+            if not results:
+                results_html = "<p style='font-size:12px; color:gray;'>No results found.</p>"
             for r in results:
                 m_id = r.get('msg_id')
                 f_name = r.get('file_name', 'Unknown File')
                 if m_id:
-                    results_html += f"<div class='file-item'>🎬 <a href='/view/{m_id}'>{f_name}</a></div>"
+                    results_html += f"<div class='file-item'>🎬 <a href='/view/{m_id}' target='_blank'>{f_name}</a></div>"
         
         total = await links_col.count_documents({})
-        content = f"<h3>Dashboard</h3><form method='get'><input name='q' placeholder='Search...' value='{query}'><br><button class='btn'>Search</button></form><div style='margin-top:20px;'>{results_html}</div><p style='font-size:10px;'>Files: {total} | <a href='/logout'>Logout</a></p>"
+        content = f"<h3>Dashboard</h3><form method='get'><input name='q' placeholder='Search file name...' value='{query}'><br><button class='btn'>Search</button></form><div style='margin-top:20px;'>{results_html}</div><p style='font-size:10px;'>Total Files: {total} | <a href='/logout'>Logout</a></p>"
         return web.Response(text=get_html(content), content_type='text/html')
 
     return web.Response(text=get_html("<h3>Admin Login</h3><form method='post'><input type='password' name='pw' placeholder='Password'><br><button class='btn'>Login</button></form>"), content_type='text/html')
@@ -141,32 +144,41 @@ async def view_page(request):
         return web.Response(text=get_html(f"<h3>{name}</h3><video controls style='width:100%; border-radius:15px; background:#000;'><source src='{dl}'></video><br><a href='{dl}' class='btn'>📥 DOWNLOAD</a>"), content_type='text/html')
     except: return web.Response(text="Error loading player")
 
-# --- Optimized Media Handler (Duplicate Check & Clean Copy) ---
+# --- Media Handler (Clean Copy & Duplicate Check Fixed) ---
 @client.on(events.NewMessage(incoming=True, func=lambda e: e.media))
 async def handle_media(event):
     try:
-        # File Unique ID for duplicate check
-        file_id = event.file.emoji_id or event.document.id
+        # Fixed Unique ID Logic for Telethon
+        if event.document:
+            file_id = f"{event.document.id}_{event.document.dc_id}"
+        elif event.photo:
+            file_id = f"{event.photo.id}_{event.photo.dc_id}"
+        else:
+            file_id = str(event.id)
+
+        # Check for Duplicate
         existing = await links_col.find_one({"file_unique_id": file_id})
-        
         if existing:
             web_link = f"{STREAM_URL}/view/{existing['msg_id']}"
             return await event.respond(f"♻️ **Already exists:** {web_link}", link_preview=False)
 
-        # 1. Clean Copy to BIN_CHANNEL (No Forward Label)
+        # Clean Copy to BIN_CHANNEL (No Forward mark)
         bin_msg = await client.send_message(BIN_CHANNEL, file=event.message.media, caption=event.message.text)
         
-        # 2. Clean Copy to BACKUP_CHANNEL
+        # Clean Copy to BACKUP_CHANNEL
         if BACKUP_CHANNEL != BIN_CHANNEL:
-            await client.send_message(BACKUP_CHANNEL, file=event.message.media, caption=event.message.text)
+            try:
+                await client.send_message(BACKUP_CHANNEL, file=event.message.media, caption=event.message.text)
+            except: pass
 
         web_link = f"{STREAM_URL}/view/{bin_msg.id}"
-        
-        # Store in Database
+        file_name = event.file.name or "video.mp4"
+
+        # Save to Database
         await links_col.insert_one({
             "msg_id": bin_msg.id, 
             "file_unique_id": file_id,
-            "file_name": event.file.name or "video.mp4"
+            "file_name": file_name
         })
         
         await event.respond(f"✅ **Ready:** {web_link}", link_preview=False)
